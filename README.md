@@ -32,7 +32,7 @@ e1-1/
 │   ├── .secret            # 숨김 파일 실습
 │   └── run.sh             # 권한 실습용 스크립트 (755)
 ├── logs/                  # 단계별 명령 + 출력 전체 로그
-│   └── 01-terminal.md ~ 10-port-conflict.md
+│   └── 01-terminal.md ~ 11-reproduce.md
 └── docs/
     └── screenshots/       # 브라우저 접속·VSCode 연동 증거 캡처
 ```
@@ -58,6 +58,7 @@ e1-1/
 - [x] Git 설정 (user.name, user.email, init.defaultBranch)
 - [x] GitHub 연동 및 push, VSCode GitHub 로그인
 - [x] 포트 충돌 진단 및 해결 (`lsof`로 원인 프로세스 확인 → 포트 해제)
+- [x] 재현성 검증 (새 폴더에 clone 후 README 재현 절차를 그대로 실행)
 - [x] 보너스: Docker Compose (단일, 멀티, up/down/ps/logs, 환경 변수), SSH 키
 
 ## 5. 터미널 조작 로그
@@ -177,6 +178,23 @@ Compose로 웹 서버와 보조 서비스를 함께 실행해 서비스 이름�
 
 📄 관련 로그 (진단 절차 전체): [logs/10-port-conflict.md](logs/10-port-conflict.md)
 
+### 8-5. 재현 절차의 줄 끝 주석이 명령 인자로 처리됨 (문서 · zsh)
+
+- **문제**: README의 재현 절차를 새 폴더에 clone해 그대로 따라 하던 중, 아래 명령에서 `hello-volume`은 정상 출력되었지만 뒤에 오류 3줄이 함께 나왔습니다.
+  ```console
+  $ docker run --rm -v mydata:/data ubuntu:24.04 cat /data/hello.txt   # → hello-volume
+  hello-volume
+  cat: '#': No such file or directory
+  cat: ''$'\342\206\222': No such file or directory
+  cat: hello-volume: No such file or directory
+  ```
+- **원인 가설**: 줄 끝에 설명으로 붙인 `# → hello-volume`이 주석으로 무시되지 않고, `cat`에 넘길 파일 이름으로 전달되었다고 생각했습니다.
+- **확인**: 오류 메시지가 `#`, `→`(깨진 바이트 `\342\206\222`), `hello-volume`을 각각 파일로 찾고 있었습니다. macOS 기본 셸인 zsh는 터미널에 직접 입력할 때 `#`을 주석으로 처리하지 않는 것(`interactive_comments` 옵션이 기본으로 꺼져 있음)이 원인이었습니다.
+- **해결**: README의 재현 절차에서 코드블록 안의 주석을 모두 없애고, 단계 제목과 기대 결과는 코드블록 밖의 글로 옮겼습니다. 이제 코드블록을 통째로 복사해 실행해도 오류가 나지 않습니다.
+- **배운 점**: 문서에 적은 명령은 그대로 복사해 실행될 수 있어야 합니다. 직접 clone해서 재현해 보는 과정에서 작성자 환경에서는 보이지 않던 문서 오류를 발견할 수 있었습니다.
+
+📄 관련 로그: [logs/11-reproduce.md](logs/11-reproduce.md)
+
 ## 9. 개념 정리 (과제 목표)
 
 ### 9-1. 절대 경로 vs 상대 경로
@@ -222,33 +240,60 @@ Compose로 웹 서버와 보조 서비스를 함께 실행해 서비스 이름�
 
 ## 10. 재현 방법
 
+각 코드블록은 통째로 복사해 터미널에 붙여넣어 실행할 수 있습니다.
+macOS(zsh)에서 새 폴더에 clone해 이 절차를 그대로 실행해 검증했습니다. ([logs/11-reproduce.md](logs/11-reproduce.md))
+
+**1. 저장소 받기**
+
 ```bash
-# 1. 저장소 받기
 git clone https://github.com/ppad125/codyssey-e1-1.git
 cd codyssey-e1-1
+```
 
-# 2. 커스텀 이미지 빌드 + 포트 매핑
+**2. 커스텀 이미지 빌드 + 포트 매핑**
+
+```bash
 docker build -t my-web:1.0 .
 docker run -d -p 8080:80 --name web-8080 my-web:1.0
 curl http://localhost:8080
+```
 
-# 3. 바인드 마운트 (app/index.html 수정 후 새로고침하면 바로 반영)
+→ `<h1>Hello, Codyssey!</h1>`이 포함된 HTML이 출력되면 성공입니다. 브라우저에서 `http://localhost:8080`으로도 확인할 수 있습니다.
+
+**3. 바인드 마운트**
+
+```bash
 docker run -d -p 8082:80 --name web-bind -v "$(pwd)/app:/usr/share/nginx/html" nginx:alpine
 curl http://localhost:8082
+```
 
-# 4. 볼륨 영속성
+→ `app/index.html`의 `Version` 값을 수정한 뒤 다시 `curl http://localhost:8082`를 실행하면, 재빌드 없이 바로 반영됩니다.
+
+**4. 볼륨 영속성**
+
+```bash
 docker volume create mydata
 docker run -d --name vol-test -v mydata:/data ubuntu:24.04 sleep infinity
 docker exec vol-test bash -c "echo hello-volume > /data/hello.txt"
 docker rm -f vol-test
-docker run --rm -v mydata:/data ubuntu:24.04 cat /data/hello.txt   # → hello-volume
+docker run --rm -v mydata:/data ubuntu:24.04 cat /data/hello.txt
+```
 
-# 5. 보너스: Docker Compose
+→ 컨테이너(`vol-test`)를 삭제한 뒤에도 마지막 명령에서 `hello-volume`이 출력되면 성공입니다.
+
+**5. 보너스: Docker Compose**
+
+```bash
 WEB_PORT=9090 APP_ENV=prod docker compose up -d
 docker compose logs client
 docker compose down
+```
 
-# 정리
+→ `client` 로그에 `Version:` 줄이 보이면 서비스 이름(`web`)으로 컨테이너 간 통신에 성공한 것입니다.
+
+**6. 정리**
+
+```bash
 docker rm -f web-8080 web-bind
 docker volume rm mydata
 ```
@@ -256,3 +301,5 @@ docker volume rm mydata
 **주의사항**
 - 8080, 8082, 9090 포트가 이미 사용 중이면 `lsof -nP -iTCP:<포트> -sTCP:LISTEN`으로 사용 중인 프로세스를 확인하고, 종료하거나 `-p 9080:80`처럼 호스트 포트만 바꿔 실행합니다. ([8-4. 포트 충돌 진단](#8-4-포트-충돌-진단-및-해결-docker--네트워크) 참고)
 - sudo 권한이 제한된 환경(예: 서울캠퍼스)에서는 Docker Desktop 대신 OrbStack을 실행하면 같은 명령을 사용할 수 있습니다.
+- macOS 기본 셸(zsh)은 터미널에 직접 입력한 명령 줄 끝의 `# 주석`을 명령 인자로 처리하므로, 코드블록에는 주석을 넣지 않았습니다. ([8-5](#8-5-재현-절차의-줄-끝-주석이-명령-인자로-처리됨-문서--zsh) 참고)
+- Windows에서는 Git Bash 또는 WSL2에서 실행하는 것을 권장합니다. PowerShell은 `$(pwd)`, 환경 변수 지정(`WEB_PORT=9090 ...`) 문법이 다르고, `lsof` 대신 `netstat -ano | findstr :<포트>`로 포트를 확인합니다.
